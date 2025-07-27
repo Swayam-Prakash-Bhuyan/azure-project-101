@@ -13,7 +13,7 @@
 # Core Variables
 $resourceGroupName = "rg-network-dev"
 $location = "eastus"
-$subscription = "your-subscription-id"  # Replace with actual subscription ID
+$subscription = "dummy-sub"  # Replace with actual subscription ID
 
 # Network Variables
 $vnetName = "vnet-app-dev"
@@ -218,27 +218,19 @@ $aksPrivateDnsZoneId = az network private-dns zone show `
   --name $aksPrivateDnsZone `
   --query id -o tsv
 
+# 1. Create user-assigned identity
+$identityName = "aks-private-dns-identity"
+az identity create --resource-group $resourceGroupName --name $identityName
+$identityId = az identity show -g $resourceGroupName -n $identityName --query id -o tsv
+
+# 2. Assign DNS permissions to identity
+az role assignment create `
+  --assignee $(az identity show -g $resourceGroupName -n $identityName --query principalId -o tsv) `
+  --role "Private DNS Zone Contributor" `
+  --scope $aksPrivateDnsZoneId
+
 # Create AKS cluster with private DNS zone configuration
-az aks create `
-  --resource-group $resourceGroupName `
-  --name $aksName `
-  --enable-private-cluster `
-  --private-dns-zone $aksPrivateDnsZoneId `
-  --network-plugin azure `
-  --network-plugin-mode overlay `
-  --vnet-subnet-id $subnetId `
-  --node-vm-size $nodeVmSize `
-  --node-count $nodeCount `
-  --service-cidr $serviceCidr `
-  --dns-service-ip $dnsServiceIp `
-  --enable-managed-identity `
-  --enable-workload-identity `
-  --enable-oidc-issuer `
-  --attach-acr $acrName `
-  --enable-azure-rbac `
-  --tags environment=dev project=aks-sre owner=swayam challenge=challenge1 costcenter=engineering department=devops region=$location `
-  --generate-ssh-keys `
-  --yes
+az aks create --resource-group $resourceGroupName --name $aksName --enable-private-cluster --private-dns-zone $aksPrivateDnsZoneId --assign-identity $identityId --enable-aad --enable-azure-rbac --network-plugin azure --network-plugin-mode overlay --vnet-subnet-id $subnetId --node-vm-size $nodeVmSize --node-count $nodeCount --service-cidr $serviceCidr --dns-service-ip $dnsServiceIp --enable-workload-identity --enable-oidc-issuer --attach-acr $acrName --tags environment=dev project=aks-sre owner=swayam challenge=challenge1 costcenter=engineering department=devops region=$location --generate-ssh-keys  --yes
 ```
 
 ### 5.2 Enable Azure Policy Add-on for AKS
@@ -416,6 +408,7 @@ az extension add --name policy
 ### 10.2 Apply Resource Tagging Policies
 ```powershell
 # Require specific tags policy
+# Save to file
 $requiredTagsPolicy = @"
 {
   "if": {
@@ -452,12 +445,15 @@ $requiredTagsPolicy = @"
 }
 "@
 
+$policyFilePath = "./require-standard-tags.json"
+$requiredTagsPolicy | Set-Content -Path $policyFilePath -Encoding utf8
+
 # Create custom policy definition
 az policy definition create `
   --name "require-standard-tags" `
   --display-name "Require Standard Tags" `
   --description "Requires environment, project, owner, and costcenter tags on all resources" `
-  --rules $requiredTagsPolicy `
+  --rules $policyFilePath `
   --mode Indexed
 
 # Assign the policy
@@ -473,8 +469,8 @@ az policy assignment create `
 az policy assignment create `
   --name "allowed-locations" `
   --scope $(az group show --name $resourceGroupName --query id -o tsv) `
-  --policy "/providers/Microsoft.Authorization/policyDefinitions/e56962a6-4747-49cd-b67b-bf8b01975c4c" `
-  --params '{"listOfAllowedLocations": {"value": ["eastus", "eastus2", "westus2"]}}' `
+  --policy "e56962a6-4747-49cd-b67b-bf8b01975c4c" `
+  --params '{\"listOfAllowedLocations\": {\"value\": [\"eastus\", \"eastus2\", \"westus2\"]}}' `
   --display-name "Allowed Locations Policy"
 ```
 
@@ -484,21 +480,21 @@ az policy assignment create `
 az policy assignment create `
   --name "aks-no-privileged-containers" `
   --scope $(az aks show --name $aksName --resource-group $resourceGroupName --query id -o tsv) `
-  --policy "/providers/Microsoft.Authorization/policyDefinitions/95edb821-ddaf-4404-9732-666045e056b4" `
+  --policy "95edb821-ddaf-4404-9732-666045e056b4" `
   --display-name "AKS Should Not Allow Privileged Containers"
 
 # AKS cluster should use managed identities
 az policy assignment create `
   --name "aks-use-managed-identity" `
   --scope $(az aks show --name $aksName --resource-group $resourceGroupName --query id -o tsv) `
-  --policy "/providers/Microsoft.Authorization/policyDefinitions/da6e2401-19da-4532-9141-fb8fbde08431" `
+  --policy "da6e2401-19da-4532-9141-fb8fbde08431" `
   --display-name "AKS Should Use Managed Identity"
 
 # AKS cluster should enable private cluster
 az policy assignment create `
   --name "aks-enable-private-cluster" `
   --scope $(az aks show --name $aksName --resource-group $resourceGroupName --query id -o tsv) `
-  --policy "/providers/Microsoft.Authorization/policyDefinitions/040732e8-d947-40b8-95d6-854c95024bf8" `
+  --policy "040732e8-d947-40b8-95d6-854c95024bf8" `
   --display-name "AKS Should Enable Private Cluster"
 ```
 
@@ -508,14 +504,14 @@ az policy assignment create `
 az policy assignment create `
   --name "subnets-require-nsg" `
   --scope $(az group show --name $resourceGroupName --query id -o tsv) `
-  --policy "/providers/Microsoft.Authorization/policyDefinitions/e71308d3-144b-4262-b144-efdc3cc90517" `
+  --policy "e71308d3-144b-4262-b144-efdc3cc90517" `
   --display-name "Subnets Should Have NSG"
 
 # Storage accounts should restrict network access
 az policy assignment create `
   --name "storage-restrict-network-access" `
   --scope $(az group show --name $resourceGroupName --query id -o tsv) `
-  --policy "/providers/Microsoft.Authorization/policyDefinitions/34c877ad-507e-4c82-993e-3452a6e0ad3c" `
+  --policy "34c877ad-507e-4c82-993e-3452a6e0ad3c" `
   --display-name "Storage Accounts Should Restrict Network Access"
 ```
 
@@ -525,14 +521,14 @@ az policy assignment create `
 az policy assignment create `
   --name "acr-enable-diagnostics" `
   --scope $(az acr show --name $acrName --resource-group $resourceGroupName --query id -o tsv) `
-  --policy "/providers/Microsoft.Authorization/policyDefinitions/c4857be7-912a-4c75-87e6-e30292bcdf78" `
+  --policy "c4857be7-912a-4c75-87e6-e30292bcdf78" `
   --display-name "ACR Should Enable Diagnostic Settings"
 
 # Key Vault should have diagnostic settings enabled
 az policy assignment create `
   --name "keyvault-enable-diagnostics" `
   --scope $(az keyvault show --name $keyVaultName --resource-group $resourceGroupName --query id -o tsv) `
-  --policy "/providers/Microsoft.Authorization/policyDefinitions/cf820ca0-f99e-4f3e-84fb-66e913812d21" `
+  --policy "cf820ca0-f99e-4f3e-84fb-66e913812d21" `
   --display-name "Key Vault Should Enable Diagnostic Settings"
 ```
 
@@ -541,7 +537,7 @@ az policy assignment create `
 # Virtual machines should have cost-effective SKUs
 $costEffectiveVmSkus = @"
 {
-  "allowedValues": {
+  "listOfAllowedSKUs": {
     "value": [
       "Standard_B1s",
       "Standard_B1ms",
@@ -554,12 +550,14 @@ $costEffectiveVmSkus = @"
   }
 }
 "@
+$costPolicyFilePath = "./cost-effective-vmskus.json"
+$costEffectiveVmSkus | Set-Content -Path $costPolicyFilePath -Encoding utf8
 
 az policy assignment create `
   --name "vm-allowed-skus" `
   --scope $(az group show --name $resourceGroupName --query id -o tsv) `
-  --policy "/providers/Microsoft.Authorization/policyDefinitions/cccc23c7-8427-4f53-ad12-b6a63eb452b3" `
-  --params $costEffectiveVmSkus `
+  --policy "cccc23c7-8427-4f53-ad12-b6a63eb452b3" `
+  --params @$costPolicyFilePath `
   --display-name "VMs Should Use Cost-Effective SKUs"
 ```
 

@@ -1,0 +1,33 @@
+﻿{
+  "if": {
+    "allOf": [
+      {
+        "field": "type",
+        "notEquals": "Microsoft.Resources/subscriptions/resourceGroups"
+      },
+      {
+        "anyOf": [
+          {
+            "field": "tags['environment']",
+            "exists": "false"
+          },
+          {
+            "field": "tags['project']",
+            "exists": "false"
+          },
+          {
+            "field": "tags['owner']",
+            "exists": "false"
+          },
+          {
+            "field": "tags['costcenter']",
+            "exists": "false"
+          }
+        ]
+      }
+    ]
+  },
+  "then": {
+    "effect": "deny"
+  }
+}
